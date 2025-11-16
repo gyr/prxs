@@ -2,30 +2,13 @@ import re
 from argparse import Namespace
 from rich.progress import Progress, TaskID
 from typing import Dict, Any
+from relx.providers import DataSourcer
 
 from relx.utils.logger import logger_setup
-from relx.utils.tools import (
-    run_command,
-    run_command_and_stream_output,
-    running_spinner_decorator,
-)
+from relx.utils.tools import running_spinner_decorator
 
 
 log = logger_setup(__name__)
-
-
-@running_spinner_decorator
-def list_packages(api_url: str, project: str) -> list[str]:
-    """
-    List all source packages from a OBS project
-
-    :param api_url: OBS instance
-    :param project: OBS project
-    :return: list of source packages
-    """
-    command = f"osc -A {api_url} ls {project}"
-    output = run_command(command.split())
-    return output.stdout
 
 
 def list_artifacs(
@@ -37,6 +20,7 @@ def list_artifacs(
     repo_info: Dict[str, str],
     progress: Progress,
     task_id: TaskID,
+    data_sourcer: DataSourcer,
 ) -> None:
     """
     List all artifacts filtered by pattern in the specified repoistory
@@ -53,17 +37,15 @@ def list_artifacs(
 
     for package in packages:
         if re.search(pattern, package):
-            command = [
-                "/bin/bash",
-                "-c",
-                f"osc -A {api_url} ls {project} {package} -b -r {repo_info['name']}",
-            ]
-            for line in run_command_and_stream_output(command):
-                if not line.startswith(tuple(invalid_start)) and not line.startswith(
-                    f"{repo_info['name']}/"
-                ):
-                    if not line.endswith(tuple(invalid_extensions)):
-                        print(line)
+            for line in data_sourcer.list_artifacts(
+                api_url,
+                project,
+                package,
+                repo_info["name"],
+                invalid_start,
+                invalid_extensions,
+            ):
+                print(line)
         progress.update(task_id, advance=1)
 
 
@@ -89,7 +71,7 @@ def build_parser(parent_parser, config: Dict[str, Any]) -> None:
     subparser.set_defaults(func=main)
 
 
-def main(args: Namespace, config: Dict[str, Any]) -> None:
+def main(args: Namespace, config: Dict[str, Any], data_sourcer: DataSourcer) -> None:
     """
     Main method that get the list of all artifacts from a given OBS project
 
@@ -98,7 +80,7 @@ def main(args: Namespace, config: Dict[str, Any]) -> None:
     """
     # Parse arguments
     parameters = {"api_url": args.osc_instance, "project": args.project}
-    packages = list_packages(**parameters).split()
+    packages = data_sourcer.list_packages(**parameters)
 
     parameters.update(
         {
@@ -118,4 +100,4 @@ def main(args: Namespace, config: Dict[str, Any]) -> None:
                     "task_id": task_id,
                 }
             )
-            list_artifacs(**parameters)
+            list_artifacs(**parameters, data_sourcer=data_sourcer)

@@ -9,6 +9,7 @@ import yaml
 import argcomplete
 from dotenv import load_dotenv
 from typing import Dict, Any
+from relx.providers import create_data_sourcer
 
 from relx import __version__
 from relx.utils.logger import logger_setup, global_logger_config
@@ -105,7 +106,8 @@ def main() -> None:
     if "func" in vars(args):
         # Run a subprogramm only if the parser detected it correctly.
         try:
-            args.func(args, config)
+            data_sourcer = create_data_sourcer()
+            args.func(args, config, data_sourcer)
         except urllib.error.URLError as url_error:
             if "name or service not known" in str(url_error).lower():
                 log.error(

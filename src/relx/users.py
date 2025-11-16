@@ -1,22 +1,20 @@
-from lxml import etree
 from rich.console import Console
 from rich.rule import Rule
 from rich.table import Table
-from subprocess import CalledProcessError
-from typing import Generator
+from typing import Generator, Dict, Any
+from relx.providers import DataSourcer
 
 from relx.utils.logger import logger_setup
-from relx.utils.tools import (
-    run_command,
-    running_spinner_decorator,
-)
+from relx.utils.tools import running_spinner_decorator
 
 
 log = logger_setup(__name__)
 
 
 @running_spinner_decorator
-def get_groups(api_url: str, group: str, is_fulllist: bool = False) -> dict:
+def get_groups(
+    data_sourcer: DataSourcer, api_url: str, group: str, is_fulllist: bool = False
+) -> Dict[str, Any]:
     """
     Given a group name return the OBS info about it."
 
@@ -24,36 +22,15 @@ def get_groups(api_url: str, group: str, is_fulllist: bool = False) -> dict:
     :param group: OBS group name
     :return: OBS group info
     """
-    try:
-        command = f"osc -A {api_url} api /group/{group}"
-        output = run_command(command.split())
-        tree = etree.fromstring(output.stdout.encode())
-        info = {}
-
-        title = tree.find("title")
-        info["Group"] = title.text if title is not None else None
-
-        email = tree.find("email")
-        info["Email"] = email.text if email is not None else None
-
-        maintainers = tree.findall("maintainer")
-        info["Maintainers"] = [tag.get("userid") for tag in maintainers]
-
-        if is_fulllist:
-            people = tree.findall("person")
-            users = []
-            for person in people:
-                for user in person.findall("person"):
-                    users.append(user.get("userid"))
-            info["Users"] = users
-
-        return info
-    except CalledProcessError as e:
-        raise RuntimeError(f"{group} not found.") from e
+    info = data_sourcer.get_groups(api_url, group, is_fulllist)
+    if not info: # Assuming an empty dict means not found
+        raise RuntimeError(f"{group} not found.")
+    return info
 
 
 @running_spinner_decorator
 def get_users(
+    data_sourcer: DataSourcer,
     api_url: str,
     search_text: str,
     is_login: bool = True,
@@ -70,36 +47,13 @@ def get_users(
     :param is_realname: Search based on user name
     :return: OBS user info
     """
-    try:
-        if is_login:
-            command = (
-                f'osc -A {api_url} api /search/person?match=@login="{search_text}"'
-            )
-        elif is_email:
-            command = (
-                f'osc -A {api_url} api /search/person?match=@email="{search_text}"'
-            )
-        elif is_realname:
-            command = f'osc -A {api_url} api /search/person?match=contains(@realname,"{search_text}")'
-        else:
-            raise RuntimeError("Invalid user search.")
-
-        output = run_command(command.split())
-        tree = etree.fromstring(output.stdout.encode())
-        info = {}
-        people = tree.findall("person")
-        if not people:
-            raise RuntimeError(f"{search_text} not found.")
-        for person in people:
-            info = {
-                "User": person.find("login").text,
-                "Email": person.find("email").text,
-                "Name": person.find("realname").text,
-                "State": person.find("state").text,
-            }
-            yield info
-    except CalledProcessError as e:
-        raise RuntimeError(f"{search_text} not found.") from e
+    users_info = data_sourcer.get_users(
+        api_url, search_text, is_login, is_email, is_realname
+    )
+    if not users_info:
+        raise RuntimeError(f"{search_text} not found.")
+    for info in users_info:
+        yield info
 
 
 def build_parser(parent_parser, config) -> None:
@@ -130,7 +84,7 @@ def build_parser(parent_parser, config) -> None:
     subparser.set_defaults(func=main)
 
 
-def main(args, config) -> None:
+def main(args, config, data_sourcer: DataSourcer) -> None:
     """
     Main method that get the OBS user from the bugowner for the given binary package.
 
@@ -141,14 +95,20 @@ def main(args, config) -> None:
     try:
         table = Table(show_header=False)
         if args.group:
-            for key, value in get_groups(
-                args.osc_instance, args.search_text, True
-            ).items():
+            group_info = get_groups(
+                data_sourcer, args.osc_instance, args.search_text, True
+            )
+            for key, value in group_info.items():
                 log.debug("%s: %s", key, value)
                 table.add_row(key, str(value))
         else:
             for info in get_users(
-                args.osc_instance, args.search_text, args.login, args.email, args.name
+                data_sourcer,
+                args.osc_instance,
+                args.search_text,
+                args.login,
+                args.email,
+                args.name,
             ):
                 for key, value in info.items():
                     log.debug("%s: %s", key, value)
